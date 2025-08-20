@@ -208,7 +208,8 @@ if not st.session_state.user_id:
     if st.button("Login"):
         if username.strip():
             st.session_state.user_id = username.strip()
-            st.experimental_rerun()
+            st.rerun()
+
         else:
             st.warning("Please enter a valid username to continue.")
     st.stop()
@@ -219,7 +220,8 @@ st.success(f"✅ Logged in as **{user_id}**")
 # Logout option
 if st.button("🚪 Logout"):
     st.session_state.user_id = ""
-    st.experimental_rerun()
+    st.rerun()
+
 
 st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
