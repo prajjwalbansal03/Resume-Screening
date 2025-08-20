@@ -122,12 +122,11 @@ Start sentence directly with the question.
 """
 
     try:
-        response = client.generate_text(
+        response = client.predict(
             model="gemini-2.5-turbo",
-            prompt=prompt,
-            max_output_tokens=300
+            input=prompt
         )
-        questions_text = response.text
+        questions_text = response.output_text
         questions = [q.strip() for q in questions_text.split("\n") if q.strip()]
         return questions
     except Exception as e:
