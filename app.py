@@ -5,7 +5,6 @@ from typing import Dict, List, Tuple
 import streamlit as st
 import pandas as pd
 from pymongo import MongoClient
-from urllib.parse import quote_plus
 
 # -------------------------------
 # MongoDB Connection
@@ -55,27 +54,24 @@ def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text
 
-# Multi-user MongoDB functions
-def save_job_roles_to_mongo(user_id, job_roles_data):
+def save_job_roles_to_mongo(user_id: str, job_roles_data: dict):
     try:
-        job_roles_collection.delete_many({"user_id": user_id})
-        for role, skills in job_roles_data.items():
-            job_roles_collection.insert_one({
-                "user_id": user_id,
-                "role": role,
-                "skills": skills
-            })
+        job_roles_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"roles": job_roles_data}},
+            upsert=True
+        )
     except Exception as e:
         st.warning(f"Could not save job roles to MongoDB: {e}")
 
-def load_job_roles_from_mongo(user_id):
-    roles_data = {}
+def load_job_roles_from_mongo(user_id: str):
     try:
-        for doc in job_roles_collection.find({"user_id": user_id}):
-            roles_data[doc["role"]] = doc["skills"]
+        doc = job_roles_collection.find_one({"user_id": user_id})
+        if doc and "roles" in doc:
+            return doc["roles"]
     except Exception as e:
         st.warning(f"Could not load job roles from MongoDB: {e}")
-    return roles_data
+    return {}
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     if pdfplumber is None:
@@ -199,17 +195,33 @@ def generate_interview_questions(role: str, matched_skills: list) -> list:
 # -------------------------------
 st.set_page_config(page_title="Resume Screening Dashboard", page_icon="📄", layout="wide")
 st.title("📄 Resume Screening Dashboard")
-st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
 # -------------------------------
-# User Login / Identifier
+# Login System
 # -------------------------------
 if "user_id" not in st.session_state:
-    st.session_state.user_id = st.text_input("Enter your username/email", key="user_login")
+    st.session_state.user_id = ""
+
 if not st.session_state.user_id:
+    st.markdown("### 🔐 Login")
+    username = st.text_input("Enter your username or email")
+    if st.button("Login"):
+        if username.strip():
+            st.session_state.user_id = username.strip()
+            st.experimental_rerun()
+        else:
+            st.warning("Please enter a valid username to continue.")
     st.stop()
 
 user_id = st.session_state.user_id
+st.success(f"✅ Logged in as **{user_id}**")
+
+# Logout option
+if st.button("🚪 Logout"):
+    st.session_state.user_id = ""
+    st.experimental_rerun()
+
+st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
 # -------------------------------
 # Sidebar Settings
@@ -220,7 +232,7 @@ with st.sidebar:
     fuzzy_threshold = st.slider("Fuzzy threshold", 70, 100, 85)
 
 # -------------------------------
-# Load existing roles & skills for this user
+# Load user-specific roles & skills
 # -------------------------------
 roles_from_db = load_job_roles_from_mongo(user_id)
 if "job_roles" not in st.session_state:
@@ -287,7 +299,7 @@ if process:
                 })
             df = pd.DataFrame(rows).sort_values(by="Total Score", ascending=False)
 
-            # Generate interview questions per candidate (hardcoded)
+            # Generate interview questions per candidate
             df["Interview Questions"] = df.apply(
                 lambda row: "\n".join(generate_interview_questions(role, row["Matched Skills"].split(", "))),
                 axis=1
