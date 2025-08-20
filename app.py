@@ -4,6 +4,16 @@ from typing import Dict, List, Tuple
 
 import streamlit as st
 import pandas as pd
+from pymongo import MongoClient
+
+# Replace with your MongoDB connection string
+MONGO_URI = st.secrets["MONGO"]["MONGO_URI"]
+client = MongoClient(MONGO_URI)
+
+# Choose database and collection
+db = client["resume_screening"]
+job_roles_collection = db["job_roles"]
+
 
 try:
     import pdfplumber
@@ -27,6 +37,22 @@ def clean_text(text: str) -> str:
     text = text.lower()
     text = re.sub(r"\s+", " ", text)
     return text
+
+def save_job_roles_to_mongo(job_roles_data):
+    job_roles_collection.delete_many({})  # clear previous data
+    for role, skills in job_roles_data.items():
+        job_roles_collection.insert_one({
+            "role": role,
+            "skills": skills
+        })
+
+def load_job_roles_from_mongo():
+    roles_data = {}
+    for doc in job_roles_collection.find():
+        roles_data[doc["role"]] = doc["skills"]
+    return roles_data
+
+
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     if pdfplumber is None:
@@ -164,19 +190,23 @@ with st.sidebar:
 st.markdown("### 1) Define Job Roles & Required Skills")
 
 if "job_roles" not in st.session_state:
-    st.session_state.job_roles = []
-
+    st.session_state.job_roles =  list(load_job_roles_from_mongo().keys())
+roles_skills = load_job_roles_from_mongo()
 col1, col2 = st.columns([3, 1])
 with col1:
     new_role = st.text_input("Add a new job role")
 with col2:
     if st.button("➕ Add Role") and new_role:
-        st.session_state.job_roles.append(new_role)
+        if new_role not in st.session_state.job_roles:
+            st.session_state.job_roles.append(new_role)
+            roles_skills[new_role]={}
+            save_job_roles_to_mongo(roles_skills)
 
 roles_skills = {}
 for role in st.session_state.job_roles:
     skills_raw = st.text_input(f"Skills for {role} (comma-separated, weights optional)", key=role)
     roles_skills[role] = parse_weighted_skills(skills_raw)
+save_job_roles_to_mongo(roles_skills)
 
 st.markdown("### 2) Upload Resumes (.pdf / .docx / .txt)")
 files = st.file_uploader(
