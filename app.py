@@ -16,7 +16,7 @@ MONGO_URI = st.secrets["MONGO"]["MONGO_URI"]
 def get_mongo_client():
     try:
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        client.server_info()  
+        client.server_info()  # Trigger connection check
         return client
     except Exception as e:
         st.error(f"Could not connect to MongoDB: {e}")
@@ -55,21 +55,23 @@ def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text
 
-def save_job_roles_to_mongo(job_roles_data):
+# Multi-user MongoDB functions
+def save_job_roles_to_mongo(user_id, job_roles_data):
     try:
-        job_roles_collection.delete_many({})
+        job_roles_collection.delete_many({"user_id": user_id})
         for role, skills in job_roles_data.items():
             job_roles_collection.insert_one({
+                "user_id": user_id,
                 "role": role,
                 "skills": skills
             })
     except Exception as e:
         st.warning(f"Could not save job roles to MongoDB: {e}")
 
-def load_job_roles_from_mongo():
+def load_job_roles_from_mongo(user_id):
     roles_data = {}
     try:
-        for doc in job_roles_collection.find():
+        for doc in job_roles_collection.find({"user_id": user_id}):
             roles_data[doc["role"]] = doc["skills"]
     except Exception as e:
         st.warning(f"Could not load job roles from MongoDB: {e}")
@@ -200,6 +202,16 @@ st.title("📄 Resume Screening Dashboard")
 st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
 # -------------------------------
+# User Login / Identifier
+# -------------------------------
+if "user_id" not in st.session_state:
+    st.session_state.user_id = st.text_input("Enter your username/email", key="user_login")
+if not st.session_state.user_id:
+    st.stop()
+
+user_id = st.session_state.user_id
+
+# -------------------------------
 # Sidebar Settings
 # -------------------------------
 with st.sidebar:
@@ -208,9 +220,9 @@ with st.sidebar:
     fuzzy_threshold = st.slider("Fuzzy threshold", 70, 100, 85)
 
 # -------------------------------
-# Load existing roles & skills
+# Load existing roles & skills for this user
 # -------------------------------
-roles_from_db = load_job_roles_from_mongo()
+roles_from_db = load_job_roles_from_mongo(user_id)
 if "job_roles" not in st.session_state:
     st.session_state.job_roles = list(roles_from_db.keys()) if roles_from_db else []
 if "roles_skills" not in st.session_state:
@@ -229,9 +241,9 @@ with col2:
         if new_role not in st.session_state.job_roles:
             st.session_state.job_roles.append(new_role)
             st.session_state.roles_skills[new_role] = {}
-            save_job_roles_to_mongo(st.session_state.roles_skills)
+            save_job_roles_to_mongo(user_id, st.session_state.roles_skills)
 
-
+# Show skill inputs for each role (pre-populated from MongoDB)
 for role in st.session_state.job_roles:
     skills_raw = st.text_input(
         f"Skills for {role} (comma-separated, weights optional)",
@@ -240,8 +252,8 @@ for role in st.session_state.job_roles:
     )
     st.session_state.roles_skills[role] = parse_weighted_skills(skills_raw)
 
-
-save_job_roles_to_mongo(st.session_state.roles_skills)
+# Save all updated roles & skills
+save_job_roles_to_mongo(user_id, st.session_state.roles_skills)
 
 # -------------------------------
 # Upload Resumes
@@ -275,7 +287,7 @@ if process:
                 })
             df = pd.DataFrame(rows).sort_values(by="Total Score", ascending=False)
 
-            
+            # Generate interview questions per candidate (hardcoded)
             df["Interview Questions"] = df.apply(
                 lambda row: "\n".join(generate_interview_questions(role, row["Matched Skills"].split(", "))),
                 axis=1
