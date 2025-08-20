@@ -122,11 +122,12 @@ Start sentence directly with the question.
 """
 
     try:
-        response = client.chat.create(
+        response = client.generate_text(
             model="gemini-2.5-turbo",
-            messages=[{"author": "user", "content": prompt}],
+            prompt=prompt,
+            max_output_tokens=300
         )
-        questions_text = response.choices[0].message.content
+        questions_text = response.text
         questions = [q.strip() for q in questions_text.split("\n") if q.strip()]
         return questions
     except Exception as e:
