@@ -24,7 +24,7 @@ except Exception:
 
 from google import genai
 import os
-api_key = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key = os.getenv("GEMINI_API_KEY"))
 
 
 
@@ -111,16 +111,6 @@ def extract_resume_text(file) -> str:
         return ""
 
 def generate_interview_questions_gemini(role: str, matched_skills: list) -> list:
-    """
-    Generate 3-5 interview questions for a candidate using Google Gemini API.
-    
-    Args:
-        role (str): Job role.
-        matched_skills (list): List of skills matched in resume.
-        
-    Returns:
-        List[str]: Generated interview questions.
-    """
     if not matched_skills:
         return []
 
@@ -128,17 +118,16 @@ def generate_interview_questions_gemini(role: str, matched_skills: list) -> list
     You are an HR expert. Generate 3-5 interview questions for a candidate applying for '{role}'.
     The candidate has the following skills: {', '.join(matched_skills)}.
     Make the questions practical and relevant to the skills.
-    Start sentence directly with questions
+    Start each sentence directly with the question.
     """
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",  # you can change to latest Gemini model
-            contents=prompt,
+        response = genai.chat.create(
+            model="chat-bison-001",  
+            messages=[{"author": "user", "content": prompt}],
         )
-        # Gemini returns the text as response.text
-        questions_text = response.text
-        # Split by line to get individual questions
+
+        questions_text = response.last
         questions = [q.strip() for q in questions_text.split("\n") if q.strip()]
         return questions
     except Exception as e:
@@ -158,7 +147,7 @@ with st.sidebar:
 
 st.markdown("### 1) Define Job Roles & Required Skills")
 
-# Dynamic job roles form
+
 if "job_roles" not in st.session_state:
     st.session_state.job_roles = []  # start empty
 
@@ -219,7 +208,7 @@ if process:
                     st.subheader(f"Role: {role}")
                     st.dataframe(df, use_container_width=True)
 
-                    # Expandable interview questions per candidate
+                   
                     for idx, row in df.iterrows():
                         with st.expander(f"Interview Questions for {row['Candidate']}"):
                             st.text(row["Interview Questions"])
