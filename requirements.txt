@@ -106,3 +106,4 @@ websockets==15.0.1
 wrapt==1.17.3
 xlsxwriter==3.2.5
 yfinance==0.2.65
+pymongo
