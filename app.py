@@ -5,16 +5,33 @@ from typing import Dict, List, Tuple
 import streamlit as st
 import pandas as pd
 from pymongo import MongoClient
+from urllib.parse import quote_plus
 
-# Replace with your MongoDB connection string
+# -------------------------------
+# MongoDB Connection
+# -------------------------------
 MONGO_URI = st.secrets["MONGO"]["MONGO_URI"]
-client = MongoClient(MONGO_URI)
 
-# Choose database and collection
-db = client["resume_screening"]
-job_roles_collection = db["job_roles"]
+@st.cache_resource
+def get_mongo_client():
+    try:
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        client.server_info()  # Trigger connection check
+        return client
+    except Exception as e:
+        st.error(f"Could not connect to MongoDB: {e}")
+        return None
 
+client = get_mongo_client()
+if client:
+    db = client["resume_screening"]
+    job_roles_collection = db["job_roles"]
+else:
+    st.stop()
 
+# -------------------------------
+# PDF, DOCX, and Fuzzy Setup
+# -------------------------------
 try:
     import pdfplumber
 except Exception:
@@ -39,20 +56,24 @@ def clean_text(text: str) -> str:
     return text
 
 def save_job_roles_to_mongo(job_roles_data):
-    job_roles_collection.delete_many({})  # clear previous data
-    for role, skills in job_roles_data.items():
-        job_roles_collection.insert_one({
-            "role": role,
-            "skills": skills
-        })
+    try:
+        job_roles_collection.delete_many({})
+        for role, skills in job_roles_data.items():
+            job_roles_collection.insert_one({
+                "role": role,
+                "skills": skills
+            })
+    except Exception as e:
+        st.warning(f"Could not save job roles to MongoDB: {e}")
 
 def load_job_roles_from_mongo():
     roles_data = {}
-    for doc in job_roles_collection.find():
-        roles_data[doc["role"]] = doc["skills"]
+    try:
+        for doc in job_roles_collection.find():
+            roles_data[doc["role"]] = doc["skills"]
+    except Exception as e:
+        st.warning(f"Could not load job roles from MongoDB: {e}")
     return roles_data
-
-
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     if pdfplumber is None:
@@ -126,13 +147,9 @@ def extract_resume_text(file) -> str:
         return ""
 
 # -------------------------------
-# Hardcoded Interview Question Generator
+# Hardcoded Interview Questions
 # -------------------------------
 def generate_interview_questions(role: str, matched_skills: list) -> list:
-    """
-    Instead of using an API, generate 1-5 hardcoded hardcore questions
-    based on skills for demonstration purposes.
-    """
     questions_bank = {
         "python": [
             "Explain the difference between deep copy and shallow copy in Python.",
@@ -155,8 +172,8 @@ def generate_interview_questions(role: str, matched_skills: list) -> list:
             "How would you secure an AWS Lambda function?"
         ],
         "c++": [
-        "Explain the difference between pointers and references in C++.",
-        "What is RAII and why is it important?"
+            "Explain the difference between pointers and references in C++.",
+            "What is RAII and why is it important?"
         ],
         "java": [
             "Explain the difference between JDK, JRE, and JVM.",
@@ -168,7 +185,7 @@ def generate_interview_questions(role: str, matched_skills: list) -> list:
     for skill in matched_skills:
         skill = skill.lower()
         if skill in questions_bank:
-            generated.append(questions_bank[skill][0])  # just pick 1 question per skill
+            generated.append(questions_bank[skill][0])
 
     if not generated:
         generated = [f"Prepare a practical question related to {', '.join(matched_skills)}."]
@@ -182,16 +199,28 @@ st.set_page_config(page_title="Resume Screening Dashboard", page_icon="📄", la
 st.title("📄 Resume Screening Dashboard")
 st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
+# -------------------------------
+# Sidebar Settings
+# -------------------------------
 with st.sidebar:
     st.header("⚙️ Settings")
     use_fuzzy = st.toggle("Enable fuzzy matching", value=True)
     fuzzy_threshold = st.slider("Fuzzy threshold", 70, 100, 85)
 
+# -------------------------------
+# Load existing roles & skills
+# -------------------------------
+roles_from_db = load_job_roles_from_mongo()
+if "job_roles" not in st.session_state:
+    st.session_state.job_roles = list(roles_from_db.keys()) if roles_from_db else []
+if "roles_skills" not in st.session_state:
+    st.session_state.roles_skills = roles_from_db if roles_from_db else {}
+
+# -------------------------------
+# Define Job Roles & Skills
+# -------------------------------
 st.markdown("### 1) Define Job Roles & Required Skills")
 
-if "job_roles" not in st.session_state:
-    st.session_state.job_roles =  list(load_job_roles_from_mongo().keys())
-roles_skills = load_job_roles_from_mongo()
 col1, col2 = st.columns([3, 1])
 with col1:
     new_role = st.text_input("Add a new job role")
@@ -199,15 +228,24 @@ with col2:
     if st.button("➕ Add Role") and new_role:
         if new_role not in st.session_state.job_roles:
             st.session_state.job_roles.append(new_role)
-            roles_skills[new_role]={}
-            save_job_roles_to_mongo(roles_skills)
+            st.session_state.roles_skills[new_role] = {}
+            save_job_roles_to_mongo(st.session_state.roles_skills)
 
-roles_skills = {}
+# Show skill inputs for each role (pre-populated from MongoDB)
 for role in st.session_state.job_roles:
-    skills_raw = st.text_input(f"Skills for {role} (comma-separated, weights optional)", key=role)
-    roles_skills[role] = parse_weighted_skills(skills_raw)
-save_job_roles_to_mongo(roles_skills)
+    skills_raw = st.text_input(
+        f"Skills for {role} (comma-separated, weights optional)",
+        value=", ".join([f"{k}:{v}" for k, v in st.session_state.roles_skills.get(role, {}).items()]),
+        key=f"skills_{role}"
+    )
+    st.session_state.roles_skills[role] = parse_weighted_skills(skills_raw)
 
+# Save all updated roles & skills
+save_job_roles_to_mongo(st.session_state.roles_skills)
+
+# -------------------------------
+# Upload Resumes
+# -------------------------------
 st.markdown("### 2) Upload Resumes (.pdf / .docx / .txt)")
 files = st.file_uploader(
     "Upload multiple resumes",
@@ -223,7 +261,7 @@ if process:
         st.error("Please upload at least one resume file.")
     else:
         all_results = {}
-        for role, skills in roles_skills.items():
+        for role, skills in st.session_state.roles_skills.items():
             if not skills:
                 continue
             rows = []
