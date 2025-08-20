@@ -13,23 +13,21 @@ MONGO_URI = st.secrets["MONGO"]["MONGO_URI"]
 
 @st.cache_resource
 def get_mongo_client():
-    try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        client.server_info()  # Trigger connection check
-        return client
-    except Exception as e:
-        st.error(f"Could not connect to MongoDB: {e}")
-        return None
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    # Will raise if cannot connect
+    client.server_info()
+    return client
 
-client = get_mongo_client()
-if client:
+try:
+    client = get_mongo_client()
     db = client["resume_screening"]
-    job_roles_collection = db["job_roles"]
-else:
+    job_roles_collection = db["job_roles"]   # one document per user: { user_id, roles: {...} }
+except Exception as e:
+    st.error(f"Could not connect to MongoDB: {e}")
     st.stop()
 
 # -------------------------------
-# PDF, DOCX, and Fuzzy Setup
+# Optional libs
 # -------------------------------
 try:
     import pdfplumber
@@ -47,31 +45,37 @@ except Exception:
     fuzz = None
 
 # -------------------------------
-# Helpers
+# Helpers – data layer
+# -------------------------------
+def save_job_roles_to_mongo(user_id: str, job_roles_data: dict):
+    """Upsert a single document for this user."""
+    job_roles_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"roles": job_roles_data}},
+        upsert=True
+    )
+
+def load_job_roles_from_mongo(user_id: str) -> Dict[str, Dict[str, float]]:
+    """Return {role: {skill: weight}} or {} if none."""
+    doc = job_roles_collection.find_one({"user_id": user_id})
+    if doc and "roles" in doc and isinstance(doc["roles"], dict):
+        return doc["roles"]
+    return {}
+
+def delete_all_roles_for_user(user_id: str):
+    job_roles_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"roles": {}}},
+        upsert=True
+    )
+
+# -------------------------------
+# Helpers – scoring/parsing
 # -------------------------------
 def clean_text(text: str) -> str:
     text = text.lower()
     text = re.sub(r"\s+", " ", text)
     return text
-
-def save_job_roles_to_mongo(user_id: str, job_roles_data: dict):
-    try:
-        job_roles_collection.update_one(
-            {"user_id": user_id},
-            {"$set": {"roles": job_roles_data}},
-            upsert=True
-        )
-    except Exception as e:
-        st.warning(f"Could not save job roles to MongoDB: {e}")
-
-def load_job_roles_from_mongo(user_id: str):
-    try:
-        doc = job_roles_collection.find_one({"user_id": user_id})
-        if doc and "roles" in doc:
-            return doc["roles"]
-    except Exception as e:
-        st.warning(f"Could not load job roles from MongoDB: {e}")
-    return {}
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     if pdfplumber is None:
@@ -98,7 +102,8 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
         return file_bytes.decode("latin-1", errors="ignore")
 
 def parse_weighted_skills(skills_raw: str) -> Dict[str, float]:
-    if not skills_raw.strip():
+    """Parse 'python:1.0, sql:0.8, aws' -> {'python':1.0,'sql':0.8,'aws':1.0}"""
+    if not skills_raw or not skills_raw.strip():
         return {}
     parts = [p.strip() for p in skills_raw.split(",") if p.strip()]
     out = {}
@@ -144,11 +149,8 @@ def extract_resume_text(file) -> str:
     else:
         return ""
 
-# -------------------------------
-# Hardcoded Interview Questions
-# -------------------------------
 def generate_interview_questions(role: str, matched_skills: list) -> list:
-    questions_bank = {
+    bank = {
         "python": [
             "Explain the difference between deep copy and shallow copy in Python.",
             "How do you manage memory in Python for large datasets?"
@@ -178,52 +180,55 @@ def generate_interview_questions(role: str, matched_skills: list) -> list:
             "What is the difference between an abstract class and an interface in Java?"
         ]
     }
-
     generated = []
-    for skill in matched_skills:
-        skill = skill.lower()
-        if skill in questions_bank:
-            generated.append(questions_bank[skill][0])
-
+    for s in matched_skills:
+        s = s.lower().strip()
+        if s in bank:
+            generated.append(bank[s][0])
     if not generated:
         generated = [f"Prepare a practical question related to {', '.join(matched_skills)}."]
-
     return generated[:5]
 
 # -------------------------------
-# Streamlit UI
+# UI
 # -------------------------------
 st.set_page_config(page_title="Resume Screening Dashboard", page_icon="📄", layout="wide")
 st.title("📄 Resume Screening Dashboard")
+st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
 # -------------------------------
-# Login System
+# Login / Logout with clean session handoff
 # -------------------------------
 if "user_id" not in st.session_state:
     st.session_state.user_id = ""
+
+def reset_user_state():
+    for k in ("job_roles", "roles_skills"):
+        if k in st.session_state:
+            del st.session_state[k]
 
 if not st.session_state.user_id:
     st.markdown("### 🔐 Login")
     username = st.text_input("Enter your username or email")
     if st.button("Login"):
         if username.strip():
+            # new login: clear any previous user data to avoid bleed
+            reset_user_state()
             st.session_state.user_id = username.strip()
             st.rerun()
-
         else:
             st.warning("Please enter a valid username to continue.")
     st.stop()
 
 user_id = st.session_state.user_id
-st.success(f"✅ Logged in as **{user_id}**")
-
-# Logout option
-if st.button("🚪 Logout"):
-    st.session_state.user_id = ""
-    st.rerun()
-
-
-st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
+col_a, col_b = st.columns([4,1])
+with col_a:
+    st.success(f"✅ Logged in as **{user_id}**")
+with col_b:
+    if st.button("🚪 Logout"):
+        reset_user_state()
+        st.session_state.user_id = ""
+        st.rerun()
 
 # -------------------------------
 # Sidebar Settings
@@ -234,43 +239,76 @@ with st.sidebar:
     fuzzy_threshold = st.slider("Fuzzy threshold", 70, 100, 85)
 
 # -------------------------------
-# Load user-specific roles & skills
+# Load roles for THIS user only
 # -------------------------------
 roles_from_db = load_job_roles_from_mongo(user_id)
-if "job_roles" not in st.session_state:
-    st.session_state.job_roles = list(roles_from_db.keys()) if roles_from_db else []
+
+# Initialize session state for this user (fresh OR from DB)
 if "roles_skills" not in st.session_state:
-    st.session_state.roles_skills = roles_from_db if roles_from_db else {}
+    st.session_state.roles_skills = roles_from_db.copy()  # local working copy
+if "job_roles" not in st.session_state:
+    st.session_state.job_roles = list(st.session_state.roles_skills.keys())
+
+# Friendly banner
+if roles_from_db:
+    st.info(f"Loaded {len(roles_from_db)} role(s) from your saved profile.")
+else:
+    st.warning("New user profile detected. Start by adding job roles and skills, then click **Save All Changes**.")
 
 # -------------------------------
-# Define Job Roles & Skills
+# Define roles & skills (no auto-save)
 # -------------------------------
 st.markdown("### 1) Define Job Roles & Required Skills")
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    new_role = st.text_input("Add a new job role")
-with col2:
-    if st.button("➕ Add Role") and new_role:
+with st.form("roles_form", clear_on_submit=False):
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        new_role = st.text_input("Add a new job role")
+    with c2:
+        add_clicked = st.form_submit_button("➕ Add Role")
+    if add_clicked and new_role:
         if new_role not in st.session_state.job_roles:
             st.session_state.job_roles.append(new_role)
-            st.session_state.roles_skills[new_role] = {}
-            save_job_roles_to_mongo(user_id, st.session_state.roles_skills)
+            st.session_state.roles_skills.setdefault(new_role, {})
 
-# Show skill inputs for each role (pre-populated from MongoDB)
-for role in st.session_state.job_roles:
-    skills_raw = st.text_input(
-        f"Skills for {role} (comma-separated, weights optional)",
-        value=", ".join([f"{k}:{v}" for k, v in st.session_state.roles_skills.get(role, {}).items()]),
-        key=f"skills_{role}"
-    )
-    st.session_state.roles_skills[role] = parse_weighted_skills(skills_raw)
+    # Editable skills per role
+    remove_marks = []
+    for role in st.session_state.job_roles:
+        row1, row2 = st.columns([4,1])
+        with row1:
+            skills_raw = st.text_input(
+                f"Skills for {role} (comma-separated, weights optional)",
+                value=", ".join([f"{k}:{v}" for k, v in st.session_state.roles_skills.get(role, {}).items()]),
+                key=f"skills_{role}"
+            )
+            st.session_state.roles_skills[role] = parse_weighted_skills(skills_raw)
+        with row2:
+            if st.form_submit_button(f"🗑️ Remove {role}", use_container_width=True):
+                remove_marks.append(role)
 
-# Save all updated roles & skills
-save_job_roles_to_mongo(user_id, st.session_state.roles_skills)
+    # remove after loop to avoid widget conflicts
+    for r in remove_marks:
+        st.session_state.job_roles = [x for x in st.session_state.job_roles if x != r]
+        st.session_state.roles_skills.pop(r, None)
+
+    save_clicked = st.form_submit_button("💾 Save All Changes", use_container_width=True)
+
+if save_clicked:
+    save_job_roles_to_mongo(user_id, st.session_state.roles_skills)
+    st.success("Saved your roles & skills.")
+    st.rerun()
+
+# Quick action buttons
+colx, coly = st.columns([1,2])
+with colx:
+    if st.button("🧹 Start From Scratch (Clear All)"):
+        st.session_state.roles_skills = {}
+        st.session_state.job_roles = []
+        delete_all_roles_for_user(user_id)
+        st.rerun()
 
 # -------------------------------
-# Upload Resumes
+# Upload resumes
 # -------------------------------
 st.markdown("### 2) Upload Resumes (.pdf / .docx / .txt)")
 files = st.file_uploader(
@@ -282,12 +320,17 @@ files = st.file_uploader(
 st.markdown("---")
 process = st.button("🔎 Process & Rank Candidates", type="primary", use_container_width=True)
 
+# Use current working copy; if user never saved, they still can test locally
+current_roles = {r: st.session_state.roles_skills.get(r, {}) for r in st.session_state.job_roles}
+
 if process:
     if not files:
         st.error("Please upload at least one resume file.")
+    elif not any(current_roles.values()):
+        st.error("Please add at least one role with skills.")
     else:
         all_results = {}
-        for role, skills in st.session_state.roles_skills.items():
+        for role, skills in current_roles.items():
             if not skills:
                 continue
             rows = []
@@ -303,7 +346,9 @@ if process:
 
             # Generate interview questions per candidate
             df["Interview Questions"] = df.apply(
-                lambda row: "\n".join(generate_interview_questions(role, row["Matched Skills"].split(", "))),
+                lambda row: "\n".join(
+                    generate_interview_questions(role, [s for s in row["Matched Skills"].split(", ") if s])
+                ),
                 axis=1
             )
 
