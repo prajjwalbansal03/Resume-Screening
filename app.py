@@ -16,7 +16,7 @@ MONGO_URI = st.secrets["MONGO"]["MONGO_URI"]
 def get_mongo_client():
     try:
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        client.server_info()  # Trigger connection check
+        client.server_info()  
         return client
     except Exception as e:
         st.error(f"Could not connect to MongoDB: {e}")
@@ -231,7 +231,7 @@ with col2:
             st.session_state.roles_skills[new_role] = {}
             save_job_roles_to_mongo(st.session_state.roles_skills)
 
-# Show skill inputs for each role (pre-populated from MongoDB)
+
 for role in st.session_state.job_roles:
     skills_raw = st.text_input(
         f"Skills for {role} (comma-separated, weights optional)",
@@ -240,7 +240,7 @@ for role in st.session_state.job_roles:
     )
     st.session_state.roles_skills[role] = parse_weighted_skills(skills_raw)
 
-# Save all updated roles & skills
+
 save_job_roles_to_mongo(st.session_state.roles_skills)
 
 # -------------------------------
@@ -275,7 +275,7 @@ if process:
                 })
             df = pd.DataFrame(rows).sort_values(by="Total Score", ascending=False)
 
-            # Generate interview questions per candidate (hardcoded)
+            
             df["Interview Questions"] = df.apply(
                 lambda row: "\n".join(generate_interview_questions(role, row["Matched Skills"].split(", "))),
                 axis=1
