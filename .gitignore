@@ -1,0 +1,43 @@
+# ------------------------
+# Python
+# ------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+.env
+.env.*
+
+# ------------------------
+# Streamlit
+# ------------------------
+.streamlit/
+
+# ------------------------
+# OS / IDE files
+# ------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# ------------------------
+# Logs / temp
+# ------------------------
+*.log
+*.tmp
+*.bak
+
+# ------------------------
+# Secrets
+# ------------------------
+api_keys.txt
+secrets.toml
