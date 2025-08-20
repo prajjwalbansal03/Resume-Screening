@@ -24,7 +24,7 @@ except Exception:
 
 from google import genai
 import os
-api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
 
@@ -115,19 +115,19 @@ def generate_interview_questions_gemini(role: str, matched_skills: list) -> list
         return []
 
     prompt = f"""
-    You are an HR expert. Generate 3-5 interview questions for a candidate applying for '{role}'.
-    The candidate has the following skills: {', '.join(matched_skills)}.
-    Make the questions practical and relevant to the skills.
-    Start each sentence directly with the question.
-    """
+You are an HR expert. Generate 3-5 interview questions for a candidate applying for '{role}'.
+The candidate has the following skills: {', '.join(matched_skills)}.
+Make the questions practical and relevant to the skills.
+Start sentence directly with the question.
+"""
 
     try:
-        response = genai.chat.create(
-            model="chat-bison-001",  
-            messages=[{"author": "user", "content": prompt}],
+        response = client.generate_text(
+            model="gemini-2.5-turbo",  # or latest model
+            prompt=prompt,
+            max_output_tokens=300
         )
-
-        questions_text = response.last
+        questions_text = response.text
         questions = [q.strip() for q in questions_text.split("\n") if q.strip()]
         return questions
     except Exception as e:
