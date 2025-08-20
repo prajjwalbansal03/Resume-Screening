@@ -1,4 +1,3 @@
-
 import io
 import re
 from typing import Dict, List, Tuple
@@ -20,16 +19,6 @@ try:
     from rapidfuzz import fuzz
 except Exception:
     fuzz = None
-
-
-from google import genai
-import os
-client = genai.Client(api_key=st.secrets["GEMINI"]["API_KEY"])
-
-
-
-
-st.set_page_config(page_title="Resume Screening Dashboard", page_icon="📄", layout="wide")
 
 # -------------------------------
 # Helpers
@@ -110,32 +99,60 @@ def extract_resume_text(file) -> str:
     else:
         return ""
 
-def generate_interview_questions_gemini(role: str, matched_skills: list) -> list:
-    if not matched_skills:
-        return []
+# -------------------------------
+# Hardcoded Interview Question Generator
+# -------------------------------
+def generate_interview_questions(role: str, matched_skills: list) -> list:
+    """
+    Instead of using an API, generate 1-5 hardcoded hardcore questions
+    based on skills for demonstration purposes.
+    """
+    questions_bank = {
+        "python": [
+            "Explain the difference between deep copy and shallow copy in Python.",
+            "How do you manage memory in Python for large datasets?"
+        ],
+        "sql": [
+            "Write a SQL query to find the second highest salary in a table.",
+            "Explain the difference between INNER JOIN and OUTER JOIN."
+        ],
+        "javascript": [
+            "Explain closures in JavaScript and give an example.",
+            "What is event delegation and why is it useful?"
+        ],
+        "react": [
+            "How does the virtual DOM work in React?",
+            "Explain React hooks and their usage."
+        ],
+        "aws": [
+            "Explain the difference between S3 and EBS in AWS.",
+            "How would you secure an AWS Lambda function?"
+        ],
+        "c++": [
+        "Explain the difference between pointers and references in C++.",
+        "What is RAII and why is it important?"
+        ],
+        "java": [
+            "Explain the difference between JDK, JRE, and JVM.",
+            "What is the difference between an abstract class and an interface in Java?"
+        ]
+    }
 
-    prompt = f"""
-You are an HR expert. Generate 3-5 interview questions for a candidate applying for '{role}'.
-The candidate has the following skills: {', '.join(matched_skills)}.
-Make the questions practical and relevant to the skills.
-Start sentence directly with the question.
-"""
+    generated = []
+    for skill in matched_skills:
+        skill = skill.lower()
+        if skill in questions_bank:
+            generated.append(questions_bank[skill][0])  # just pick 1 question per skill
 
-    try:
-        response = client.predict(
-            model="gemini-2.5-turbo",
-            input=prompt
-        )
-        questions_text = response.output_text
-        questions = [q.strip() for q in questions_text.split("\n") if q.strip()]
-        return questions
-    except Exception as e:
-        return [f"Error generating questions: {e}"]
+    if not generated:
+        generated = [f"Prepare a practical question related to {', '.join(matched_skills)}."]
 
+    return generated[:5]
 
 # -------------------------------
-# UI
+# Streamlit UI
 # -------------------------------
+st.set_page_config(page_title="Resume Screening Dashboard", page_icon="📄", layout="wide")
 st.title("📄 Resume Screening Dashboard")
 st.caption("Upload resumes once, define multiple job roles & skills, and rank candidates per role.")
 
@@ -146,9 +163,8 @@ with st.sidebar:
 
 st.markdown("### 1) Define Job Roles & Required Skills")
 
-
 if "job_roles" not in st.session_state:
-    st.session_state.job_roles = []  # start empty
+    st.session_state.job_roles = []
 
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -191,9 +207,9 @@ if process:
                 })
             df = pd.DataFrame(rows).sort_values(by="Total Score", ascending=False)
 
-            # Generate interview questions per candidate
+            # Generate interview questions per candidate (hardcoded)
             df["Interview Questions"] = df.apply(
-                lambda row: "\n".join(generate_interview_questions_gemini(role, row["Matched Skills"].split(", "))),
+                lambda row: "\n".join(generate_interview_questions(role, row["Matched Skills"].split(", "))),
                 axis=1
             )
 
@@ -207,7 +223,6 @@ if process:
                     st.subheader(f"Role: {role}")
                     st.dataframe(df, use_container_width=True)
 
-                   
                     for idx, row in df.iterrows():
                         with st.expander(f"Interview Questions for {row['Candidate']}"):
                             st.text(row["Interview Questions"])
